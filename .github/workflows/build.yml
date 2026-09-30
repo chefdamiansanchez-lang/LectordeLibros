@@ -1,0 +1,57 @@
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descomprimir el zip del proyecto (si hay uno)
+        run: |
+          ZIP=$(ls *.zip 2>/dev/null | head -n 1 || true)
+          if [ -n "$ZIP" ]; then
+            mkdir -p proyecto
+            unzip -q -o "$ZIP" -d proyecto
+            SETTINGS=$(find proyecto -name settings.gradle.kts | head -n 1)
+          else
+            SETTINGS=$(find . -name settings.gradle.kts -not -path './proyecto/*' | head -n 1)
+          fi
+          if [ -z "$SETTINGS" ]; then echo "No se encontro el proyecto Android (settings.gradle.kts)"; exit 1; fi
+          echo "ROOT=$(dirname "$SETTINGS")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Aceptar licencias del SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Compilar APK
+        run: cd "$ROOT" && gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Renombrar APK
+        run: cp "$ROOT/app/build/outputs/apk/debug/app-debug.apk" "$GITHUB_WORKSPACE/LectorLibros.apk"
+
+      - name: Guardar APK como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: LectorLibros-APK
+          path: LectorLibros.apk
+
+      - name: Publicar APK en Releases (descarga directa desde el celular)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete apk-latest --yes --cleanup-tag || true
+          gh release create apk-latest LectorLibros.apk --title "Lector de Libros (APK)" --notes "APK listo para instalar" --target "$GITHUB_SHA"
